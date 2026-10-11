@@ -1,10 +1,11 @@
 name: test
 on:
-  push:
-    branches:
-    - 'main'
-    - 'master'
-  pull_request:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'Optional ava test file/pattern to run instead of the full suite'
+        required: false
+        default: ''
 
 defaults:
   run:
@@ -13,11 +14,12 @@ defaults:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        node: [14, 16, 18, 20]
+        node: [22, 14, 16, 18, 20]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,8 +28,63 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      - name: Configure npm time machine registry
+        run: |
+          npm config set registry https://time-machines-npm.sealsecurity.io/
+          npm config set //time-machines-npm.sealsecurity.io/:_authToken 2025-02-07T14:48:51.617000Z
+
       - name: npm ci
         run: npm ci --ignore-scripts
 
       - name: test
-        run: npm test
+        run: |
+          # Node >= 20.19 / >= 22.7 turn on ESM module-syntax detection by default,
+          # so Node loads src/*.js (ESM syntax inside a CommonJS package) as native
+          # ESM and never reaches @babel/register's require hook -- every
+          # extensionless import then dies with ERR_MODULE_NOT_FOUND. Turn detection
+          # off on those runtimes; Node 14/16/18 do not know the flag.
+          NODE_ARGS=""
+          if [ "${{ matrix.node }}" -ge 20 ]; then
+            NODE_ARGS='--node-arguments=--no-experimental-detect-module'
+          fi
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            npx ava $NODE_ARGS ${{ inputs.test-filter }}
+          else
+            npm test -- $NODE_ARGS
+          fi
+
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+
+      - name: Configure npm time machine registry
+        run: |
+          npm config set registry https://time-machines-npm.sealsecurity.io/
+          npm config set //time-machines-npm.sealsecurity.io/:_authToken 2025-02-07T14:48:51.617000Z
+
+      - name: npm ci
+        run: npm ci --ignore-scripts
+
+      - name: pin npm
+        run: npm i -g npm@10.9.2
+
+      - name: npm pack
+        run: npm pack
+
+      - name: collect tarball
+        run: |
+          mkdir -p dist-artifacts
+          mv postcss-selector-parser-7.1.0.tgz dist-artifacts/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: postcss-selector-parser-tgz
+          path: dist-artifacts/*.tgz
+          if-no-files-found: error
